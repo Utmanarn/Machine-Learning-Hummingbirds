@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using Unity.MLAgents;
+using Unity.MLAgents.Sensors;
 using UnityEngine;
 
 /// <summary>
@@ -113,6 +114,100 @@ public class HummingbirdAgent : Agent
         transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
     }
 
+    /// <summary>
+    /// Collect vector observations from the environmnent.
+    /// </summary>
+    /// <param name="sensor">The vector sensor.</param>
+    public override void CollectObservations(VectorSensor sensor)
+    {
+        // If nearestFlower is null, observe an empty array and return early.
+        if (nearestFlower == null)
+        {
+            sensor.AddObservation(new float[10]);
+            return;
+        }
+
+        // Observe the agent's local rotation. (4 observations)
+        sensor.AddObservation(transform.localRotation.normalized);
+
+        // Get a vector from the beak tip to the nearest flower.
+        Vector3 toFlower = nearestFlower.FlowerCenterPosition - beakTip.position;
+
+        // Observe a normalized vector pointing to the nearest flower. (3 observations)
+        sensor.AddObservation(toFlower.normalized);
+
+        // Observe a dot product that indicates whether the beak tip is in front of the flower. (1 observation)
+        // (+1 means that the beak tip is directly in front of the flower, -1 means directly behind)
+        sensor.AddObservation(Vector3.Dot(toFlower.normalized, -nearestFlower.FlowerUpVector));
+
+        // Observe a dot product that indicates whether the beak is pointing towards the flower. (1 observation)
+        // (+1 means that the beak is pointing directly at the flower, -1 means directly away)
+        sensor.AddObservation(Vector3.Dot(beakTip.forward, -nearestFlower.FlowerUpVector));
+
+        // Observe the relative distance from the beak tip to the flower. (1 observation)
+        sensor.AddObservation(toFlower.magnitude / FlowerArea.AreaDiameter);
+
+        // 10 total observations
+    }
+
+    /// <summary>
+    /// When Behavior Type is set to "Huristic Only" on the agent's Behavior Paramenters,
+    /// this function will be called. Its return values will be fed into
+    /// <see cref="OnActionReceived(float[])"/> instead of using the neural network.
+    /// </summary>
+    /// <param name="actionsOut">An output action array.</param>
+    public override void Heuristic(float[] actionsOut)
+    {
+        Vector3 forward = Vector3.zero;
+        Vector3 left = Vector3.zero;
+        Vector3 up = Vector3.zero;
+        float pitch = 0f;
+        float yaw = 0f;
+
+        if (Input.GetKey(KeyCode.W)) forward = transform.forward;
+        else if (Input.GetKey(KeyCode.S)) forward = -transform.forward;
+
+        if (Input.GetKey(KeyCode.A)) left = -transform.right;
+        else if (Input.GetKey(KeyCode.D)) left = transform.right;
+
+        if (Input.GetKey(KeyCode.E)) up = transform.up;
+        else if (Input.GetKey(KeyCode.Q)) up = -transform.up;
+
+        if (Input.GetKey(KeyCode.UpArrow)) pitch = 1f;
+        else if (Input.GetKey(KeyCode.DownArrow)) pitch = -1f;
+
+        if (Input.GetKey(KeyCode.LeftArrow)) yaw = -1f;
+        else if (Input.GetKey(KeyCode.RightArrow)) yaw = 1f;
+
+        Vector3 combined = (forward + left + up).normalized;
+
+        actionsOut[0] = combined.x;
+        actionsOut[1] = combined.y;
+        actionsOut[2] = combined.z;
+        actionsOut[3] = pitch;
+        actionsOut[4] = yaw;
+    }
+
+    /// <summary>
+    /// Prevent the agent from moving and taking actions.
+    /// </summary>
+    public void FreezeAgent()
+    {
+        Debug.Assert(trainingMode == false, "Freeze/Unfreeze not supported in training mode.");
+        frozen = true;
+        rigidbody.Sleep();
+    }
+
+    /// <summary>
+    /// Allows the agent to move and take actions again.
+    /// </summary>
+    public void UnfreezeAgent()
+    {
+        Debug.Assert(trainingMode == false, "Freeze/Unfreeze not supported in training mode.");
+        frozen = false;
+        rigidbody.WakeUp();
+    }
+
     private void MoveToSafeRandomPosition(bool inFrontOfFlower)
     {
         bool safePositionFound = false;
@@ -177,5 +272,67 @@ public class HummingbirdAgent : Agent
                 }
             }
         }
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        TriggerEnterOrStay(other);
+    }
+
+    private void OnTriggerStay(Collider other)
+    {
+        TriggerEnterOrStay(other);
+    }
+
+    private void TriggerEnterOrStay(Collider collider)
+    {
+        // Check if agent is colliding with nectar.
+        if (collider.CompareTag("nectar"))
+        {
+            Vector3 closestPointToBeakTip = collider.ClosestPoint(beakTip.position);
+
+            if (Vector3.Distance(beakTip.position, closestPointToBeakTip) < BeakTipRadius)
+            {
+                Flower flower = flowerArea.GetFlowerFromNectar(collider);
+
+                float nectarRecieved = flower.Feed(.01f);
+
+                NectarObtained += nectarRecieved;
+
+                if (trainingMode)
+                {
+                    float bonus = .02f * Mathf.Clamp01(Vector3.Dot(transform.forward, -nearestFlower.FlowerUpVector));
+                    AddReward(.01f + bonus);
+                }
+
+                if (!flower.HasNectar)
+                {
+                    UpdateNearestFlower();
+                }
+            }
+        }
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (trainingMode && collision.collider.CompareTag("boundary"))
+        {
+            // Collided with the area boundary, give a negative reward.
+            AddReward(-.5f);
+        }
+    }
+
+    private void Update()
+    {
+        // Draw a line from the beak tip to the nearest flower.
+        if (nearestFlower != null)
+            Debug.DrawLine(beakTip.position, nearestFlower.FlowerCenterPosition, Color.green);
+    }
+
+    private void FixedUpdate()
+    {
+        // Avoids scenario where nearest flower nectar is stolen by opponent and not updated.
+        if (nearestFlower != null && !nearestFlower.HasNectar)
+            UpdateNearestFlower();
     }
 }
