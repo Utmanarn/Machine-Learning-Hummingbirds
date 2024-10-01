@@ -13,6 +13,7 @@ public class FlowerArea : MonoBehaviour
 
     private List<GameObject> _flowerPlants;
     private Dictionary<Collider, Flower> _nectarFlowerDictionary;
+    private bool _findChildFlowersHasBeenCalled;
     
     public List<Flower> Flowers { get; private set; }
 
@@ -21,15 +22,14 @@ public class FlowerArea : MonoBehaviour
         _flowerPlants = new List<GameObject>();
         _nectarFlowerDictionary = new Dictionary<Collider, Flower>();
         Flowers = new List<Flower>();
-    }
 
-    private void Start()
-    {
-        FindChildFlowers(transform);
+        FindChildFlowers(transform); // Must be called in awake to make sure it is called before the GameManager calls MainMenu and ResetFlowers.
     }
 
     public void ResetFlowers()
     {
+        //if (!_findChildFlowersHasBeenCalled) FindChildFlowers(transform);
+
         foreach (var flowerPlant in _flowerPlants)
         {
             float xRotation = Random.Range(-5f, 5f);
